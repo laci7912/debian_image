@@ -403,6 +403,28 @@
   var atReady = false;
   var nulRun = 0;
 
+  // The guest writes UTF-8. Feeding bytes to the terminal one by one with
+  // String.fromCharCode() would decode them as latin-1, so "árvíztűrő" would
+  // show up as "arvÃ­ztÅ±rÅ". Collect the raw bytes and decode them properly,
+  // in batches, so a big "cat" is neither garbled nor slow.
+  var utf8Decoder = new TextDecoder("utf-8");
+  var outBytes = [];
+  var flushTimer = null;
+
+  function queueByte(b) {
+    outBytes.push(b);
+    if (flushTimer === null) flushTimer = setTimeout(flushOut, 8);
+  }
+
+  function flushOut() {
+    flushTimer = null;
+    if (!outBytes.length) return;
+    var bytes = new Uint8Array(outBytes);
+    outBytes = [];
+    // stream:true keeps a half-received multi-byte character for the next batch
+    term.write(utf8Decoder.decode(bytes, { stream: true }));
+  }
+
   function handleSerialByte(b) {
     if (!term) return;
 
@@ -442,14 +464,17 @@
     if (b === 0) {
       nulRun++;
       if (nulRun === 64) {
-        term.write("\x1b[38;5;214m[hiányzó lemeztömb – a kisebb (lite) változat" +
-          " nem tartalmazza ezt a fájlt]\x1b[0m\r\n");
+        // The note is Hungarian, so it must go through the same UTF-8 encoder
+        // as everything else, otherwise the accents would be mangled.
+        var note = textEncoder.encode("\x1b[38;5;214m[hiányzó lemeztömb – a kisebb" +
+          " (lite) változat nem tartalmazza ezt a fájlt]\x1b[0m\r\n");
+        for (var k = 0; k < note.length; k++) queueByte(note[k]);
       }
       return;
     }
     nulRun = 0;
 
-    term.write(String.fromCharCode(b));
+    queueByte(b);
   }
 
   function parseInfo(payload) {
