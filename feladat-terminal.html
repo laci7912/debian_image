@@ -1,0 +1,643 @@
+<!--
+  Debian 12 webterm – tanulói fájl (terminál + feladatok egy oldalon)
+
+  A terminál maga a beépíthető modul (js/debian-terminal.js), ezért ez az oldal
+  ugyanazt használja, amit bármelyik másik HTML is be tud húzni.
+-->
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Debian 12 – terminál és gyakorló feladatok</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23d70a53'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2129;
+    --line: #2d333b;
+    --text: #d4d4d4;
+    --dim: #8b949e;
+    --accent: #d70a53;
+    --accent2: #58a6ff;
+    --ok: #3fb950;
+    --bad: #f85149;
+    --warn: #d29922;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    font-size: 14px;
+  }
+
+  body { display: flex; flex-direction: column; overflow: hidden; }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+  }
+  header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  header .sub { color: var(--dim); font-size: 12px; }
+  header .spacer { flex: 1; }
+
+  .status {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 11px; border-radius: 999px;
+    font-size: 12px; font-weight: 600;
+    background: #21262d; border: 1px solid var(--line);
+  }
+  .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .status.booting::before { background: var(--warn); animation: pulse 1.2s infinite; }
+  .status.ready::before { background: var(--ok); }
+  .status.error::before { background: var(--bad); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+
+  main { flex: 1; display: flex; min-height: 0; }
+
+  /* A TERMINÁL KONTÉNERE – a modul ezt tölti ki. */
+  #term { flex: 1; min-width: 0; min-height: 0; }
+
+  /* ---------- aside ---------- */
+  aside {
+    width: 430px; flex: 0 0 430px;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+
+  .tabs {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 10px; border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+  }
+  .tab {
+    background: transparent; border: 1px solid transparent; color: var(--dim);
+    padding: 6px 12px; border-radius: 7px;
+  }
+  .tab:hover:not(:disabled) { background: #21262d; color: var(--text); }
+  .tab.active { background: #21262d; border-color: var(--line); color: var(--text); }
+  .tabs .spacer { flex: 1; }
+
+  .pane { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+  .pane.hidden { display: none; }
+
+  .aside-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .aside-head h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+
+  .progress-wrap { display: flex; align-items: center; gap: 10px; }
+  .bar { flex: 1; height: 7px; border-radius: 999px; background: #21262d; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .3s; }
+  .progress-text { font-size: 12px; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+  .toolbar {
+    display: flex; gap: 8px; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  }
+
+  button {
+    font: inherit; font-size: 12px; font-weight: 600;
+    padding: 7px 12px; border-radius: 7px; cursor: pointer;
+    background: #21262d; color: var(--text);
+    border: 1px solid var(--line);
+    transition: background .15s, border-color .15s;
+  }
+  button:hover:not(:disabled) { background: #2d333b; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover:not(:disabled) { background: #e8185f; }
+  button.ghost { background: transparent; }
+
+  #tasks { flex: 1; overflow-y: auto; padding: 8px 10px 20px; }
+
+  .task {
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--panel-2);
+    margin-bottom: 9px; padding: 11px 12px;
+    border-left: 3px solid var(--line);
+  }
+  .task.ok { border-left-color: var(--ok); }
+  .task.bad { border-left-color: var(--bad); }
+
+  .task-top { display: flex; align-items: flex-start; gap: 9px; }
+  .badge {
+    flex: 0 0 auto; width: 21px; height: 21px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+    background: #21262d; color: var(--dim); border: 1px solid var(--line);
+    margin-top: 1px;
+  }
+  .task.ok .badge { background: rgba(63,185,80,.15); color: var(--ok); border-color: var(--ok); }
+  .task.bad .badge { background: rgba(248,81,73,.15); color: var(--bad); border-color: var(--bad); }
+
+  .task-title { font-weight: 600; font-size: 13px; line-height: 1.35; flex: 1; }
+  .task-desc { color: var(--dim); font-size: 12px; line-height: 1.5; margin: 6px 0 0 30px; }
+  .task-desc code {
+    background: #0d1117; border: 1px solid var(--line); border-radius: 4px;
+    padding: 1px 5px; font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 11.5px;
+    color: #e6edf3;
+  }
+
+  .task-actions { display: flex; align-items: center; gap: 8px; margin: 9px 0 0 30px; }
+  .task-actions button { padding: 5px 10px; font-size: 11.5px; }
+  .task-msg { font-size: 11.5px; color: var(--dim); }
+  .task-msg.ok { color: var(--ok); }
+  .task-msg.bad { color: var(--bad); }
+
+  .hint {
+    margin: 8px 0 0 30px; padding: 8px 10px;
+    background: #0d1117; border: 1px dashed var(--line); border-radius: 7px;
+    font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 11.5px;
+    color: #a5d6ff; white-space: pre-wrap; word-break: break-word;
+  }
+  .hint.hidden { display: none; }
+
+  .footnote {
+    padding: 10px 14px; border-top: 1px solid var(--line);
+    font-size: 11px; color: var(--dim); line-height: 1.5; flex: 0 0 auto;
+  }
+
+  /* ---------- help pane ---------- */
+  #pane-help { overflow-y: auto; }
+  #pane-help section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  #pane-help h3 {
+    margin: 0 0 8px; font-size: 11px; letter-spacing: .9px;
+    text-transform: uppercase; color: var(--dim); font-weight: 600;
+  }
+  #pane-help p { margin: 0 0 8px; font-size: 12.5px; line-height: 1.6; color: #a9b4bf; }
+  #pane-help p:last-child { margin-bottom: 0; }
+  #pane-help code {
+    font-family: "Cascadia Mono", Consolas, monospace; font-size: 11.5px;
+    background: #0d1117; border: 1px solid var(--line); border-radius: 4px;
+    padding: 1px 5px; color: #e6edf3;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: "Cascadia Mono", Consolas, monospace; font-size: 11.5px;
+    background: #0d1117; border: 1px solid var(--line); border-radius: 5px;
+    padding: 5px 9px; margin: 0 5px 5px 0;
+    cursor: pointer; color: #c9d1d9;
+    transition: border-color .15s, background .15s;
+  }
+  .chip:hover { border-color: var(--accent2); background: #111823; }
+  #kv { font-size: 12.5px; line-height: 1.9; }
+  #kv div { display: flex; justify-content: space-between; gap: 10px; }
+  #kv .k { color: var(--dim); }
+  #kv .v { font-family: "Cascadia Mono", Consolas, monospace; color: #e6edf3; font-size: 12px; }
+
+  @media (max-width: 1180px) { aside { width: 380px; flex-basis: 380px; } }
+  @media (max-width: 980px) {
+    main { flex-direction: column; }
+    aside { width: auto; flex: 0 0 46%; border-left: 0; border-top: 1px solid var(--line); }
+    #term { flex: 1 1 54%; min-height: 320px; }
+    header .sub { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot"></span>
+  <div>
+    <h1>Debian 12 – terminál és gyakorló feladatok</h1>
+    <div class="sub">Valódi rendszer, valódi parancsok · v86 emulátor</div>
+  </div>
+  <span class="spacer"></span>
+  <span class="status booting" id="status"><span id="status-text">Indítás…</span></span>
+</header>
+
+<main>
+  <div id="term"></div>
+
+  <aside>
+    <div class="tabs">
+      <button class="tab active" data-tab="tasks" type="button">Feladatok</button>
+      <button class="tab" data-tab="help" type="button">Súgó</button>
+      <span class="spacer"></span>
+      <button id="btn-restart" class="ghost" type="button" disabled>Újraindítás</button>
+    </div>
+
+    <div class="pane" id="pane-tasks">
+      <div class="aside-head">
+        <h2>Feladatok</h2>
+        <div class="progress-wrap">
+          <div class="bar"><i id="bar"></i></div>
+          <span class="progress-text" id="progress-text">0 / 10 kész</span>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <button id="check-all" class="primary" disabled>Mind ellenőrzése</button>
+        <button id="reset" class="ghost" disabled>Újrakezdés</button>
+      </div>
+
+      <div id="tasks"></div>
+
+      <div class="footnote">
+        A vendég gyökérkönyvtára <b>csak olvasható</b>: írni a <code>/root</code>,
+        <code>/tmp</code> és <code>/var/log</code> alatt lehet. Újraindításkor
+        minden módosítás elvész.
+      </div>
+    </div>
+
+    <div class="pane hidden" id="pane-help">
+      <section>
+        <h3>Parancsok</h3>
+        <p>Írd be a parancsot a terminál alatti mezőbe, és nyomj <code>Enter</code>-t,
+        vagy gépelj egyenesen a terminálba. A kimenet a valódi Debian rendszerből jön.</p>
+        <div id="chips"></div>
+      </section>
+      <section>
+        <h3>Rendszer</h3>
+        <div id="kv">
+          <div><span class="k">Név</span><span class="v" id="k-name">–</span></div>
+          <div><span class="k">Verzió</span><span class="v" id="k-ver">–</span></div>
+          <div><span class="k">Hostnév</span><span class="v" id="k-host">–</span></div>
+          <div><span class="k">Mag</span><span class="v" id="k-kernel">–</span></div>
+          <div><span class="k">Fájlrendszer</span><span class="v" id="k-fs">–</span></div>
+          <div><span class="k">Eszköz</span><span class="v" id="k-dev">–</span></div>
+          <div><span class="k">Csomagok</span><span class="v" id="k-pkgs">–</span></div>
+        </div>
+      </section>
+      <section>
+        <h3>Hogyan működik</h3>
+        <p>A böngészőben egy x86-os PC fut (v86), amely a Debian által biztosított
+        6.1-es kernellel indul. Az initramfs csak annyit tesz, hogy felcsatolja a kép
+        ext4 partícióját, majd <code>chroot</code>-tal átadja a vezérlést a kép saját
+        <code>bash</code>-jának.</p>
+        <p>A kép <strong>read-only</strong> módon van csatolva, a <code>/tmp</code>,
+        <code>/root</code>, <code>/var/log</code> pedig tmpfs-en él, így a fájl nem sérül.</p>
+      </section>
+      <section>
+        <h3>Ellenőrzés</h3>
+        <p>Az <b>Ellenőrzés</b> gomb nem a beírt parancsot nézi, hanem a létrejött
+        állapotot: ha a fájl a helyén van és a tartalma megfelelő, a feladat kész —
+        akárhogyan is oldottad meg.</p>
+      </section>
+    </div>
+  </aside>
+</main>
+
+<!-- A terminál modul: mindent maga tölt be (xterm, v86, lemezkezelő, stílus). -->
+<script src="js/debian-terminal.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  /* ================================================================== */
+  /* feladatok                                                          */
+  /* ================================================================== */
+  // Minden feladat egy ellenőrző parancsot futtat a vendégben. A parancs
+  // PASS-t ír, ha a feladat kész, különben FAIL-t. Így a tanuló bármilyen
+  // módon megoldhatja – a lényeg a létrejött állapot, nem a beírt parancs.
+  var TASKS = [
+    {
+      cim: "Lépj be a root saját könyvtárába",
+      leiras: "A <code>/root</code> a root felhasználó otthona. Lépj be oda a " +
+              "<code>cd</code> paranccsal.",
+      hint: "cd /root",
+      check: '[ "$PWD" = "/root" ] && echo PASS || echo FAIL'
+    },
+    {
+      cim: "Készíts munkakönyvtárat",
+      leiras: "Hozz létre egy <code>labor</code> nevű könyvtárat a <code>/root</code> " +
+              "alatt, benne egy <code>adatok</code> alkönyvtárat. A szülőkönyvtárat is " +
+              "hozza létre egyszerre.",
+      hint: "mkdir -p /root/labor/adatok",
+      check: '[ -d /root/labor/adatok ] && echo PASS || echo FAIL'
+    },
+    {
+      cim: "Írj fájlt echo-val",
+      leiras: "Készítsd el a <code>/root/labor/adatok/verzio.txt</code> fájlt. " +
+              "A tartalma pontosan ez legyen: <code>Debian 12</code>",
+      hint: 'echo "Debian 12" > /root/labor/adatok/verzio.txt',
+      check: 'grep -qx "Debian 12" /root/labor/adatok/verzio.txt && echo PASS || echo FAIL'
+    },
+    {
+      cim: "Másolj fájlt",
+      leiras: "Készíts másolatot a <code>verzio.txt</code>-ről ugyanabba a mappába " +
+              "<code>verzio_masolat.txt</code> néven.",
+      hint: "cp /root/labor/adatok/verzio.txt /root/labor/adatok/verzio_masolat.txt",
+      check: 'cmp -s /root/labor/adatok/verzio.txt /root/labor/adatok/verzio_masolat.txt ' +
+             '&& echo PASS || echo FAIL'
+    },
+    {
+      cim: "Több soros fájl",
+      leiras: "Írj pontosan 4 sort a <code>nevek.txt</code> fájlba (a <code>adatok</code> " +
+              "mappába), ezeket: <code>Anna</code>, <code>Béla</code>, <code>András</code>, " +
+              "<code>Csilla</code> – soronként egyet.",
+      hint: "printf 'Anna\\nBéla\\nAndrás\\nCsilla\\n' > /root/labor/adatok/nevek.txt",
+      check: '[ "$(wc -l < /root/labor/adatok/nevek.txt 2>/dev/null)" = "4" ] ' +
+             '&& echo PASS || echo FAIL'
+    },
+    {
+      cim: "Szűrés grep-pel",
+      leiras: "A <code>nevek.txt</code>-ből válogasd ki az <b>A</b> betűvel kezdődő " +
+              "neveket, és írd őket a <code>nevek_a.txt</code> fájlba.",
+      hint: "grep '^A' /root/labor/adatok/nevek.txt > /root/labor/adatok/nevek_a.txt",
+      check: 'f=/root/labor/adatok/nevek_a.txt; ' +
+             '[ "$(wc -l < "$f" 2>/dev/null)" = "2" ] && ! grep -qv "^A" "$f" ' +
+             '&& echo PASS || echo FAIL'
+    },
+    {
+      cim: "Rendezés",
+      leiras: "Rendezd abc szerint a <code>nevek.txt</code> sorait, és az eredményt " +
+              "írd a <code>rendezett.txt</code> fájlba.",
+      hint: "sort /root/labor/adatok/nevek.txt > /root/labor/adatok/rendezett.txt",
+      check: '[ -s /root/labor/adatok/rendezett.txt ] && ' +
+             '[ "$(LC_ALL=C sort /root/labor/adatok/nevek.txt)" = ' +
+             '"$(cat /root/labor/adatok/rendezett.txt)" ] && echo PASS || echo FAIL'
+    },
+    {
+      cim: "Mezők kivágása (cut)",
+      leiras: "Az <code>/etc/passwd</code> fájlból csak a felhasználóneveket (az első " +
+              "mezőt) írd a <code>felhasznalok.txt</code> fájlba – soronként egy nevet, " +
+              "kettőspont nélkül.",
+      hint: "cut -d: -f1 /etc/passwd > /root/labor/adatok/felhasznalok.txt",
+      check: 'f=/root/labor/adatok/felhasznalok.txt; ' +
+             '[ -s "$f" ] && [ "$(wc -l < "$f")" = "$(wc -l < /etc/passwd)" ] && ' +
+             '! grep -q ":" "$f" && echo PASS || echo FAIL'
+    },
+    {
+      cim: "Jogosultság beállítása",
+      leiras: "Állítsd a <code>verzio.txt</code> jogosultságát <code>640</code>-re: " +
+              "a tulajdonos olvashasson és írhasson, a csoport csak olvashasson, " +
+              "más semmit.",
+      hint: "chmod 640 /root/labor/adatok/verzio.txt",
+      check: '[ "$(stat -c %a /root/labor/adatok/verzio.txt 2>/dev/null)" = "640" ] ' +
+             '&& echo PASS || echo FAIL'
+    },
+    {
+      cim: "Csomagolás tar-ral",
+      leiras: "Csomagold be a teljes <code>adatok</code> könyvtárat a " +
+              "<code>/root/labor/adatok.tar.gz</code> fájlba, gzip-pel tömörítve.",
+      hint: "tar -czf /root/labor/adatok.tar.gz -C /root/labor adatok",
+      check: 'tar -tzf /root/labor/adatok.tar.gz 2>/dev/null | grep -q "adatok/nevek.txt" ' +
+             '&& echo PASS || echo FAIL'
+    }
+  ];
+
+  /* ================================================================== */
+  /* állapot                                                            */
+  /* ================================================================== */
+  var statusEl   = document.getElementById("status");
+  var statusTxt  = document.getElementById("status-text");
+  var tasksEl    = document.getElementById("tasks");
+  var barEl      = document.getElementById("bar");
+  var progressEl = document.getElementById("progress-text");
+  var checkAllBtn= document.getElementById("check-all");
+  var resetBtn   = document.getElementById("reset");
+  var restartBtn = document.getElementById("btn-restart");
+
+  var results = [];            // null = még nem ellenőrzött
+  var term = null;
+
+  /* ================================================================== */
+  /* terminál – a beépíthető modul                                     */
+  /* ================================================================== */
+  function initTerminal() {
+    term = DebianTerminal.create(document.getElementById("term"), {
+      baseUrl: ".",
+      onStatus: function (kind, text) {
+        statusEl.className = "status " + (kind === "ready" ? "ready" : kind === "error" ? "error" : "booting");
+        statusTxt.textContent = text;
+      },
+      onInfo: function (d) {
+        var map = { name: "k-name", ver: "k-ver", host: "k-host", kernel: "k-kernel",
+                    pkgs: "k-pkgs", fs: "k-fs", dev: "k-dev" };
+        Object.keys(map).forEach(function (k) {
+          var el = document.getElementById(map[k]);
+          if (el && d[k]) el.textContent = d[k];
+        });
+      },
+      onReady: function () {
+        checkAllBtn.disabled = false;
+        resetBtn.disabled = false;
+        restartBtn.disabled = false;
+        term.focus();
+      }
+    });
+  }
+
+  /* ================================================================== */
+  /* feladatpanel                                                        */
+  /* ================================================================== */
+  function buildTaskList() {
+    results = TASKS.map(function () { return null; });
+    tasksEl.innerHTML = "";
+
+    TASKS.forEach(function (t, i) {
+      var card = document.createElement("div");
+      card.className = "task";
+      card.id = "task-" + i;
+
+      card.innerHTML =
+        '<div class="task-top">' +
+          '<div class="badge">' + (i + 1) + "</div>" +
+          '<div class="task-title">' + t.cim + "</div>" +
+        "</div>" +
+        '<div class="task-desc">' + t.leiras + "</div>" +
+        '<div class="task-actions">' +
+          '<button data-check="' + i + '">Ellenőrzés</button>' +
+          '<button class="ghost" data-hint="' + i + '">Megoldás</button>' +
+          '<span class="task-msg" id="msg-' + i + '"></span>' +
+        "</div>" +
+        '<div class="hint hidden" id="hint-' + i + '">' + escapeHtml(t.hint) + "</div>";
+
+      tasksEl.appendChild(card);
+    });
+
+    tasksEl.addEventListener("click", function (ev) {
+      var b = ev.target.closest("button");
+      if (!b) return;
+      if (b.hasAttribute("data-check")) {
+        checkOne(Number(b.getAttribute("data-check")));
+      } else if (b.hasAttribute("data-hint")) {
+        var h = document.getElementById("hint-" + b.getAttribute("data-hint"));
+        h.classList.toggle("hidden");
+      }
+    });
+
+    updateProgress();
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function setTaskState(i, state, msg) {
+    var card = document.getElementById("task-" + i);
+    var msgEl = document.getElementById("msg-" + i);
+    card.classList.remove("ok", "bad");
+    if (state === "ok") card.classList.add("ok");
+    if (state === "bad") card.classList.add("bad");
+
+    msgEl.className = "task-msg" + (state === "ok" ? " ok" : state === "bad" ? " bad" : "");
+    msgEl.textContent = msg || "";
+  }
+
+  function updateProgress() {
+    var done = results.filter(function (r) { return r === true; }).length;
+    barEl.style.width = (done / TASKS.length * 100) + "%";
+    progressEl.textContent = done + " / " + TASKS.length + " kész";
+    if (done === TASKS.length && done > 0) {
+      progressEl.textContent = "Minden feladat kész!";
+    }
+  }
+
+  function checkOne(i) {
+    if (!term || !term.isReady()) return Promise.resolve(false);
+    var btn = document.querySelector('[data-check="' + i + '"]');
+    if (btn) { btn.disabled = true; btn.textContent = "Ellenőrzés…"; }
+    setTaskState(i, null, "ellenőrzés…");
+
+    return term.run(TASKS[i].check).then(function (r) {
+      var ok = /\bPASS\b/.test(r.out);
+      results[i] = ok;
+
+      if (ok) {
+        setTaskState(i, "ok", "kész");
+        if (btn) { btn.textContent = "Újra"; btn.disabled = false; }
+      } else {
+        setTaskState(i, "bad", "még nem jó");
+        if (btn) { btn.textContent = "Ellenőrzés"; btn.disabled = false; }
+      }
+      updateProgress();
+      return ok;
+    });
+  }
+
+  async function checkAll() {
+    if (!term || !term.isReady()) return;
+    checkAllBtn.disabled = true;
+    resetBtn.disabled = true;
+
+    for (var i = 0; i < TASKS.length; i++) {
+      if (results[i] === true) continue;      // a kész feladatokat nem bántjuk
+      await checkOne(i);
+      await new Promise(function (r) { setTimeout(r, 120); });
+    }
+
+    checkAllBtn.disabled = false;
+    resetBtn.disabled = false;
+
+    var done = results.filter(function (r) { return r === true; }).length;
+    if (done === TASKS.length) {
+      term.write("\r\n\x1b[1;32m✔ Mind a " + TASKS.length + " feladat kész!\x1b[0m\r\n");
+    }
+  }
+
+  async function resetWork() {
+    if (!term || !term.isReady()) return;
+    resetBtn.disabled = true;
+    checkAllBtn.disabled = true;
+
+    // A semleges "/" könyvtárba lépünk vissza (nem /root-ba!), különben az
+    // 1. feladat ("lépj be a /root-ba") újrakezdés után magától teljesülne.
+    await term.run("cd /; rm -rf /root/labor");
+    results = TASKS.map(function () { return null; });
+    TASKS.forEach(function (t, i) { setTaskState(i, null, ""); });
+    updateProgress();
+
+    resetBtn.disabled = false;
+    checkAllBtn.disabled = false;
+    term.write("\r\n\x1b[38;5;214mMunkakönyvtár törölve – kezdheted elölről.\x1b[0m\r\n");
+  }
+
+  /* ================================================================== */
+  /* felület: fülek, példák                                             */
+  /* ================================================================== */
+  function initTabs() {
+    document.querySelectorAll(".tab").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var name = btn.getAttribute("data-tab");
+        document.querySelectorAll(".tab").forEach(function (b) {
+          b.classList.toggle("active", b === btn);
+        });
+        document.getElementById("pane-tasks").classList.toggle("hidden", name !== "tasks");
+        document.getElementById("pane-help").classList.toggle("hidden", name !== "help");
+        if (name === "tasks" && term) term.fit();
+      });
+    });
+  }
+
+  function initChips() {
+    var examples = [
+      "ls -la /root",
+      "cat /etc/os-release",
+      "uname -a",
+      "df -h",
+      "free -h",
+      "ls /etc",
+      "cat /etc/passwd | head",
+      "pwd"
+    ];
+    var chipBox = document.getElementById("chips");
+    examples.forEach(function (ex) {
+      var b = document.createElement("button");
+      b.className = "chip";
+      b.type = "button";
+      b.textContent = ex;
+      b.title = "Beírja a parancssávba – utána Enter";
+      b.addEventListener("click", function () {
+        if (!term || !term.isReady()) return;
+        if (term.input) {
+          term.input.value = ex;
+          term.input.focus();
+        }
+      });
+      chipBox.appendChild(b);
+    });
+  }
+
+  /* ================================================================== */
+  /* indítás                                                            */
+  /* ================================================================== */
+  initTabs();
+  initChips();
+  buildTaskList();
+  initTerminal();
+
+  checkAllBtn.addEventListener("click", checkAll);
+  resetBtn.addEventListener("click", resetWork);
+
+  // Újraindítás: az emulátor eldobása után tiszta lappal indulunk, és a
+  // feladatlista is visszaáll (a /root/labor a memóriában élt).
+  restartBtn.addEventListener("click", function () {
+    checkAllBtn.disabled = true;
+    resetBtn.disabled = true;
+    restartBtn.disabled = true;
+    buildTaskList();
+    term.restart();
+  });
+
+  /* ================================================================== */
+  /* debug hook (automatizált teszthez)                                 */
+  /* ================================================================== */
+  window.__term = function () { return term; };
+  window.__termText = function () {
+    if (!term || !term.term) return "";
+    var b = term.term.buffer.active, out = [];
+    for (var i = 0; i < b.length; i++) out.push(b.getLine(i).translateToString(true));
+    return out.join("\n");
+  };
+  window.__tasks = function () { return results.slice(); };
+  window.__checkAll = checkAll;
+  window.__checkOne = checkOne;
+  window.__guestRun = function (cmd, t) { return term.run(cmd, t); };
+  window.__ready = function () { return !!(term && term.isReady()); };
+  window.__box = function () {
+    return { q: "", suppress: term ? term.suppress : false, busy: term ? term.busy : false };
+  };
+})();
+</script>
+</body>
+</html>

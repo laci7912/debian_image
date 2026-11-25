@@ -58,7 +58,14 @@ let html = fs.readFileSync(indexPath, "utf8");
 
 // A relatív hivatkozásokat abszolútra cseréljük. Minden ilyen hely egy helyen
 // van, hogy a csere egyértelmű legyen (és ne nyúljon a magyar szöveghez).
+// Kétféle oldalt ismer: a régi, közvetlenül v86-ot használó oldalt (index.html,
+// feladat.html) és az új, beépíthető modulra épülőt (feladat-terminal.html).
 const replacements = [
+  // — beépíthető modul (feladat-terminal.html) —
+  ['src="js/debian-terminal.js"',    'src="' + base + 'js/debian-terminal.js"'],
+  ['baseUrl: "."',                   'baseUrl: "' + base + '"'],
+
+  // — közvetlen v86 (index.html, feladat.html) —
   ['href="vendor/xterm.css"',        'href="' + base + 'vendor/xterm.css"'],
   ['src="vendor/xterm.js"',          'src="' + base + 'vendor/xterm.js"'],
   ['src="vendor/addon-fit.js"',      'src="' + base + 'vendor/addon-fit.js"'],
@@ -70,15 +77,27 @@ const replacements = [
   ['var V86_DIR      = "v86/";',     'var V86_DIR      = "' + base + 'v86/";']
 ];
 
+// Csak azokat a helyeket cseréljük, amelyek tényleg benne vannak: a két oldal-
+// típus mást tartalmaz, és nem hiba, ha a másik típus részei hiányoznak –
+// de legalább egy cserének meg kell történnie.
 let done = 0;
 for (const [from, to] of replacements) {
-  if (!html.includes(from)) {
-    console.error("HIBA: nem találom ezt a részt a(z) " + pageName + " fájlban: " + from);
-    console.error("Megváltozott a HTML? Frissítsd ezt a szkriptet is.");
-    process.exit(1);
-  }
+  if (!html.includes(from)) continue;
   html = html.split(from).join(to);
   done++;
+}
+
+if (done === 0) {
+  console.error("HIBA: egyetlen hivatkozást sem találtam a(z) " + pageName + " fájlban.");
+  console.error("Megváltozott a HTML? Frissítsd ezt a szkriptet is.");
+  process.exit(1);
+}
+
+// A modul a saját <script> címéből is meg tudja állapítani a repót, de a
+// baseUrl opciót kifejezetten felülírjuk, hogy file:// alól is biztos legyen.
+if (!html.includes('src="' + base + 'js/debian-terminal.js"')) {
+  console.error("HIBA: a terminál modul hivatkozása nem lett abszolút.");
+  process.exit(1);
 }
 
 // Egy rövid fejléc, hogy a tanuló lássa, honnan jön a tartalom.
