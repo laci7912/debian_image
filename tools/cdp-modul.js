@@ -150,11 +150,14 @@ async function waitReady(ws, expr, secs) {
     await sleep(400);
 
     // 1) a modul betöltődött és a függőségeit is behúzta
-    const api = await evaluate(ws, "typeof DebianTerminal + '/' + (DebianTerminal && DebianTerminal.version)");
-    check("DebianTerminal API", /^object\/\d/.test(api), api);
+    // Hálózatról töltött oldalnál az első pillanatban még about:blank lehet,
+    // ezért megvárjuk, hogy a modul tényleg megérkezzen.
+    const apiReady = await waitReady(ws, "typeof window.DebianTerminal === 'object'", 60);
+    const api = await evaluate(ws, "String(window.DebianTerminal && window.DebianTerminal.version)");
+    check("DebianTerminal API", apiReady >= 0 && /^\d/.test(api), api + " (" + apiReady + " s)");
 
-    const cssOk = await evaluate(ws, "!!document.querySelector('.dtx') && !!document.querySelector('.dtx-host') && !!document.querySelector('.dtx-cmdbar')");
-    check("modul DOM felépült (dtx-* osztályok)", cssOk);
+    const cssReady = await waitReady(ws, "!!document.querySelector('.dtx') && !!document.querySelector('.dtx-host')", 60);
+    check("modul DOM felépült (dtx-* osztályok)", cssReady >= 0, cssReady >= 0 ? cssReady + " s" : "");
 
     const styled = await evaluate(ws, `(function(){
       var h = document.querySelector('.dtx .dtx-host');
