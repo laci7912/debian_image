@@ -21,6 +21,49 @@
   var GZIP_MAGIC_0 = 0x1f;
   var GZIP_MAGIC_1 = 0x8b;
 
+  /*
+   * Példányok KÖZÖTTI tömbcache.
+   *
+   * A lemez a vendégben csak olvasható, ezért egy kész tömb soha nem változik:
+   * nyugodtan odaadhatjuk minden példánynak ugyanazt az Uint8Array-t. Így ha
+   * egy oldalon több terminál fut (pl. feladatonként egy), a lemez csak
+   * egyszer töltődik le és csak egyszer foglal memóriát – a virtuális gépek
+   * saját RAM-ja természetesen továbbra is külön van.
+   *
+   * A HTTP-cache erre nem elég: sok szerver (és a file:// cím) nem küld
+   * gyorsítótárazási fejlécet, ilyenkor a böngésző újra kérné a darabokat.
+   */
+  var SharedChunks = {
+    map: new Map(),                 // "base|idx" -> Uint8Array | null (csupa nulla)
+    bytes: 0,
+    maxBytes: 256 * 1024 * 1024,    // ennyi fölött a legrégebbieket eldobjuk
+
+    key: function (base, idx) { return base + "|" + idx; },
+
+    get: function (k) {
+      if (!this.map.has(k)) return undefined;
+      var v = this.map.get(k);
+      // LRU: használatkor a végére tesszük
+      this.map.delete(k);
+      this.map.set(k, v);
+      return v;
+    },
+
+    set: function (k, v) {
+      if (this.map.has(k)) return;
+      this.map.set(k, v);
+      if (v) this.bytes += v.byteLength;
+      while (this.bytes > this.maxBytes && this.map.size > 1) {
+        var oldest = this.map.keys().next().value;
+        var gone = this.map.get(oldest);
+        this.map.delete(oldest);
+        if (gone) this.bytes -= gone.byteLength;
+      }
+    },
+
+    stats: function () { return { chunks: this.map.size, bytes: this.bytes }; }
+  };
+
   function LazyDisk(opts) {
     this.baseUrl  = opts.baseUrl;             // e.g. "disk" or "/__disk/disk"
     this.chunkSize = opts.chunkSize || 524288;
@@ -37,7 +80,7 @@
     this.pending = new Map();                // index -> Promise
     this.present = null;                     // Set of chunk indices that exist
 
-    this.stats = { chunkFetches: 0, bytesDownloaded: 0, cacheHits: 0, reads: 0, missing: 0 };
+    this.stats = { chunkFetches: 0, bytesDownloaded: 0, cacheHits: 0, sharedHits: 0, reads: 0, missing: 0 };
     // Which chunks were actually requested, in request order. Used by the
     // measurement tooling to decide what a "lite" edition must ship.
     this.requested = [];
@@ -70,13 +113,28 @@
     var self = this;
     if (this.chunks.has(idx)) { this.stats.cacheHits++; return Promise.resolve(this.chunks.get(idx)); }
     if (this.pending.has(idx)) return this.pending.get(idx);
-    if (this.present && !this.present.has(idx)) { this.chunks.set(idx, null); return Promise.resolve(null); }
+
+    // Más példány már letöltötte? Akkor azonnal innen adjuk.
+    var sharedKey = SharedChunks.key(this.baseUrl, idx);
+    var shared = SharedChunks.get(sharedKey);
+    if (shared !== undefined) {
+      this.chunks.set(idx, shared);
+      this.stats.sharedHits++;
+      return Promise.resolve(shared);
+    }
+
+    if (this.present && !this.present.has(idx)) {
+      this.chunks.set(idx, null);
+      SharedChunks.set(sharedKey, null);
+      return Promise.resolve(null);
+    }
 
     this.requested.push(idx);
 
     var p = this._httpGet(this._chunkUrl(idx)).then(function (body) {
       if (body === null) {                    // 404: an all-zero region of the image
         self.chunks.set(idx, null);
+        SharedChunks.set(SharedChunks.key(self.baseUrl, idx), null);
         self.stats.missing++;
         // In the lite edition a missing chunk can also mean "this part of the
         // image was not shipped", which is worth telling the user about.
@@ -86,6 +144,7 @@
       if (body.byteLength > 0) self.stats.bytesDownloaded += body.byteLength;
       return self._decompress(body).then(function (raw) {
         self.chunks.set(idx, raw);
+        SharedChunks.set(SharedChunks.key(self.baseUrl, idx), raw);
         self.stats.chunkFetches++;
         self.onStats(self.stats);
         return raw;
@@ -213,4 +272,6 @@
   LazyDisk.prototype.set_state = function () {};
 
   global.LazyDisk = LazyDisk;
+  // A megosztott tömbcache állapota (méréshez, hibakereséshez).
+  LazyDisk.sharedStats = function () { return SharedChunks.stats(); };
 })(typeof window !== "undefined" ? window : globalThis);
